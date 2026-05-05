@@ -1,13 +1,16 @@
-# outputs (do not track)
-Analysis_By_Genotype/
-Analysis_By_Lineage/
-FKBP5 Raw Data/
+# GraphPad / analysis outputs
 FKBP5 BioDent GraphPad Files/
-BioDent Analysis/
+*.prism
 
-# excel / macros (outputs or external files)
+# Excel macros / VBA
+*.bas
+
+# Excel files
 *.xlsx
 *.xlsm
 
-# python cache
-__pycache__/
+# output folders
+Analysis_By_Genotype/
+Analysis_By_Lineage/
+FKBP5 Raw Data/
+BioDent Analysis/
