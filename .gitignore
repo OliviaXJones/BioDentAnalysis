@@ -14,3 +14,7 @@ Analysis_By_Genotype/
 Analysis_By_Lineage/
 FKBP5 Raw Data/
 BioDent Analysis/
+
+# Superseded scripts (kept locally for reference)
+FKBP5_BioDentAnalysis_RawDatatoMaster.py
+FKBP5_BioDent_Master_to_CSV.py
