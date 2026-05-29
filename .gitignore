@@ -18,3 +18,7 @@ BioDent Analysis/
 # Superseded scripts (kept locally for reference)
 FKBP5_BioDentAnalysis_RawDatatoMaster.py
 FKBP5_BioDent_Master_to_CSV.py
+
+# Per-pipeline standalone configs (superseded by studies_config.json)
+study_config.json
+single_study_config.json
