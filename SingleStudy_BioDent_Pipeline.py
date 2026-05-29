@@ -1,4 +1,3 @@
-import re
 import json
 import sys
 import pandas as pd
@@ -15,39 +14,13 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
 from BioDent_Utils import (
-    COLUMNS_TO_AVERAGE, get_sex, clean_and_average_data, ask_not_found_action
+    COLUMNS_TO_AVERAGE, clean_and_average_data, ask_not_found_action
 )
 
-CONFIG_PATH = Path(__file__).parent / "study_config.json"
+CONFIG_PATH = Path(__file__).parent / "single_study_config.json"
 
 
-# --- 1. FKBP5-SPECIFIC HELPERS ---
-
-def parse_squashed_code(code):
-    """Parses IDs like 'W12M10', 'H24F5', or '2W10M10' for CSV grouping."""
-    code = str(code).strip().upper()
-    match = re.match(r"(\d+)?([A-Z])(\d+)([MF])(\d+)", code)
-    if match:
-        gen_num, gen_char, age, sex_char, mouse_num = match.groups()
-        gen_map = {'W': 'Wildtype', 'M': 'Mutant', 'H': 'Heterozygous'}
-        genotype = gen_map.get(gen_char, "Unknown")
-        sex = "Male" if sex_char == 'M' else "Female"
-        if gen_num:
-            genotype = f"{gen_num}{genotype}"
-        return genotype, age, sex, mouse_num
-    return None, None, None, None
-
-
-def get_genotype_prefix(code):
-    if not code:
-        return ""
-    genotype_full, _, _, _ = parse_squashed_code(code)
-    if genotype_full:
-        return re.sub(r'\d+', '', genotype_full)
-    return ""
-
-
-# --- 2. MASTER SYNC ---
+# --- 1. MASTER SYNC ---
 
 def sync_to_master(df_source, master_path):
     wb = openpyxl.load_workbook(master_path)
@@ -65,22 +38,14 @@ def sync_to_master(df_source, master_path):
         found_match = False
 
         while True:
-            genotype  = get_genotype_prefix(mouse_code)
-            sex       = get_sex(mouse_code)
-            start_col = 1 if sex == 'M' else 13
-
-            target_sheets = [s for s in all_sheets if genotype.lower() in s.lower()]
-            other_sheets  = [s for s in all_sheets if s not in target_sheets]
-            search_order  = target_sheets + other_sheets
-
-            for sheet_name in search_order:
+            for sheet_name in all_sheets:
                 ws = wb[sheet_name]
                 for r in range(2, max(ws.max_row + 1, 50)):
-                    cell_val   = ws.cell(row=r, column=start_col).value
+                    cell_val   = ws.cell(row=r, column=1).value
                     clean_cell = str(cell_val).strip().upper() if cell_val else ""
                     if clean_cell == mouse_code.strip().upper():
                         for j, col_name in enumerate(COLUMNS_TO_AVERAGE):
-                            ws.cell(row=r, column=start_col + 1 + j).value = row_data[col_name]
+                            ws.cell(row=r, column=2 + j).value = row_data[col_name]
                         sync_count += 1
                         synced_ids.add(mouse_code)
                         found_match = True
@@ -98,79 +63,47 @@ def sync_to_master(df_source, master_path):
                 break
 
     wb.save(master_path)
-    print(f"Synced {sync_count} mice to master.")
+    print(f"Synced {sync_count} subjects to master.")
 
     unmatched = all_processed_ids - synced_ids
     if unmatched:
-        print("The following mice were not found in the master list:")
+        print("The following subjects were not found in the master list:")
         for m in sorted(unmatched):
             print(f"  - {m}")
     else:
-        print("All processed mice were successfully matched in the master list.")
+        print("All processed subjects were successfully matched in the master list.")
 
 
-# --- 3. CSV GENERATION ---
+# --- 2. CSV GENERATION ---
 
-def generate_grouped_tables(df, csv_output_dir):
-    sort_priority   = ['Wildtype', 'Mutant', 'Heterozygous']
-    folder_genotype = csv_output_dir / "Analysis_By_Genotype"
-    folder_lineage  = csv_output_dir / "Analysis_By_Lineage"
-    folder_genotype.mkdir(parents=True, exist_ok=True)
-    folder_lineage.mkdir(parents=True, exist_ok=True)
-
-    for metric in COLUMNS_TO_AVERAGE:
-        clean_metric = re.sub(r'[\-\/\(\)]', '', metric).replace("  ", " ").strip()
-        for age in df['Age_Extracted'].dropna().unique():
-            for sex in ['Male', 'Female']:
-                base_subset = df[
-                    (df['Sex_Extracted'] == sex) & (df['Age_Extracted'] == age)
-                ].copy()
-                if base_subset.empty:
-                    continue
-
-                gen_subset = base_subset[
-                    base_subset['Progeny_Group'].isin(sort_priority)
-                ].copy()
-                if not gen_subset.empty:
-                    table_gen = gen_subset.pivot_table(
-                        index='ID_Num', columns='Progeny_Group', values=metric)
-                    table_gen = table_gen.reindex(
-                        columns=[c for c in sort_priority if c in table_gen.columns])
-                    table_gen.to_csv(
-                        folder_genotype / f"{sex}_{age}Wks_{clean_metric}.csv")
-
-                table_lin = base_subset.pivot_table(
-                    index='ID_Num', columns='Progeny_Group', values=metric)
-                sorted_cols = sorted(
-                    table_lin.columns,
-                    key=lambda x: next(
-                        (idx for idx, g in enumerate(sort_priority) if x.startswith(g)), 99)
-                )
-                table_lin[sorted_cols].to_csv(
-                    folder_lineage / f"{sex}_{age}Wks_{clean_metric}.csv")
-
-
-def process_master_to_csv(master_path, csv_output_dir):
-    print("Generating CSV analysis tables...")
+def process_master_to_csv(master_path, csv_output_dir, study_name):
+    print("Generating CSV summary...")
     xl = pd.ExcelFile(master_path)
     all_data = []
+
     for sheet in xl.sheet_names:
         if sheet.lower() in ["summary", "notes", "calculations"]:
             continue
         raw_df = pd.read_excel(master_path, sheet_name=sheet)
-        for start_idx in [0, 12]:
-            subset = raw_df.iloc[:, start_idx:start_idx + 11].copy()
-            subset.columns = ['Mouse Code'] + COLUMNS_TO_AVERAGE
-            subset['Progeny_Group'] = sheet
-            all_data.append(subset)
+        subset = raw_df.iloc[:, 0:11].copy()
+        subset.columns = ['Subject_ID'] + COLUMNS_TO_AVERAGE
+        subset['Group'] = sheet
+        all_data.append(subset)
 
-    final_df = pd.concat(all_data, ignore_index=True).dropna(subset=['Mouse Code'])
-    parsed = final_df['Mouse Code'].apply(lambda x: pd.Series(parse_squashed_code(x)))
-    final_df[['Gen_Label', 'Age_Extracted', 'Sex_Extracted', 'ID_Num']] = parsed
-    generate_grouped_tables(final_df, csv_output_dir)
+    if not all_data:
+        print("No data sheets found in master.")
+        return
+
+    final_df = pd.concat(all_data, ignore_index=True).dropna(subset=['Subject_ID'])
+    final_df = final_df[['Subject_ID', 'Group'] + COLUMNS_TO_AVERAGE]
+
+    csv_output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = csv_output_dir / f"{study_name}_Summary.csv"
+    final_df.to_csv(out_path, index=False)
+    print(f"Summary saved to {out_path}")
 
 
-# --- 4. PIPELINE ENTRY POINT ---
+# --- 3. PIPELINE ENTRY POINT ---
 
 def run_pipeline(config):
     study_name    = config["study_name"]
@@ -212,12 +145,12 @@ def run_pipeline(config):
         print(f"Processed files moved to {analyzed_folder}/")
 
         output_folder.mkdir(parents=True, exist_ok=True)
-        process_master_to_csv(master_path, csv_output_dir)
+        process_master_to_csv(master_path, csv_output_dir, study_name)
 
         QMessageBox.information(
             None, "Pipeline Complete",
             f"All done!\n\n"
-            f"CSV summaries saved to:\n{csv_output_dir}\n\n"
+            f"CSV summary saved to:\n{csv_output_dir}\n\n"
             f"Raw files archived to:\n{analyzed_folder}"
         )
 
@@ -229,12 +162,12 @@ def run_pipeline(config):
         QMessageBox.critical(None, "Unexpected Error", str(e))
 
 
-# --- 5. STANDALONE CONFIG DIALOG ---
+# --- 4. STANDALONE CONFIG DIALOG ---
 
 class ConfigDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FKBP5 BioDent Analysis Pipeline")
+        self.setWindowTitle("BioDent Single Study Pipeline")
         self.setMinimumWidth(640)
         self.setWindowModality(Qt.ApplicationModal)
         self._config = {}
@@ -251,7 +184,7 @@ class ConfigDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(28, 24, 28, 24)
 
-        title = QLabel("FKBP5 Study Configuration")
+        title = QLabel("Single Study Configuration")
         title.setFont(QFont("Arial", 15, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -266,7 +199,7 @@ class ConfigDialog(QDialog):
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         self._study_name = QLineEdit(existing.get("study_name", ""))
-        self._study_name.setPlaceholderText("e.g. FKBP5_Cohort1")
+        self._study_name.setPlaceholderText("e.g. Cohort2_Treatment")
         form.addRow("Study Name:", self._study_name)
 
         self._raw_data, raw_row = self._path_row(existing.get("raw_data_root", ""), folder=True)
@@ -348,7 +281,7 @@ class ConfigDialog(QDialog):
         return self._config
 
 
-# --- 6. STANDALONE ENTRY POINT ---
+# --- 5. STANDALONE ENTRY POINT ---
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

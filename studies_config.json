@@ -1,0 +1,11 @@
+{
+    "studies": [
+        {
+            "study_name": "FKBP5 Genotyping 2026",
+            "study_type": "fkbp5",
+            "raw_data_root": "F:/BioDent/FKBP5 Raw Data",
+            "master_file": "F:/BioDent/FKBP5_BioDentMaster.xlsx",
+            "output_folder": "F:/BioDent"
+        }
+    ]
+}
