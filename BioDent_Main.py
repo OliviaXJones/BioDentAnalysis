@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QDialogButtonBox,
     QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QWidget, QFrame, QComboBox
+    QWidget, QFrame, QComboBox, QGroupBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -66,11 +66,15 @@ class StudyEditDialog(QDialog):
         self._name.setPlaceholderText("e.g. FKBP5 Cohort 2")
         form.addRow("Study Name:", self._name)
 
-        self._type = QComboBox()
-        self._type.addItems(STUDY_TYPES)
-        stored_type = s.get("study_type", "fkbp5").lower()
-        self._type.setCurrentIndex(0 if stored_type == "fkbp5" else 1)
-        form.addRow("Study Type:", self._type)
+        self._sex = QComboBox()
+        self._sex.addItems(["Male", "Female", "Mixed"])
+        self._sex.setCurrentText(s.get("sex", "Male"))
+        self._sex.currentTextChanged.connect(self._on_sex_changed)
+        form.addRow("Cohort Sex:", self._sex)
+
+        self._age = QLineEdit(s.get("age", ""))
+        self._age.setPlaceholderText("e.g. 16 Weeks")
+        form.addRow("Cohort Age:", self._age)
 
         self._raw, raw_row = self._path_row(s.get("raw_data_root", ""), folder=True)
         form.addRow("Raw Data Folder:", raw_row)
@@ -83,6 +87,35 @@ class StudyEditDialog(QDialog):
 
         layout.addLayout(form)
         layout.addSpacing(8)
+
+        # --- Group Map (Single Study only) ---
+        self._gm_group = QGroupBox("Group Map  (prefix → group name)")
+        gm_layout = QVBoxLayout(self._gm_group)
+
+        _init_mixed = s.get("sex", "Male") == "Mixed"
+        self._gm_table = QTableWidget(0, 3 if _init_mixed else 2)
+        self._gm_table.setMinimumHeight(120)
+        self._gm_table.verticalHeader().setVisible(False)
+        self._update_gm_headers()
+        gm_layout.addWidget(self._gm_table)
+
+        gm_btn_row = QHBoxLayout()
+        add_row_btn = QPushButton("+ Add Row")
+        add_row_btn.clicked.connect(lambda: self._add_gm_row())
+        rm_row_btn = QPushButton("- Remove Selected")
+        rm_row_btn.clicked.connect(self._remove_gm_row)
+        gm_btn_row.addWidget(add_row_btn)
+        gm_btn_row.addWidget(rm_row_btn)
+        gm_btn_row.addStretch()
+        gm_layout.addLayout(gm_btn_row)
+
+        layout.addWidget(self._gm_group)
+
+        for prefix, val in s.get("group_map", {}).items():
+            if isinstance(val, dict):
+                self._add_gm_row(prefix, val.get("group", ""), val.get("sex", "Male"))
+            else:
+                self._add_gm_row(prefix, val)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         btn_box.accepted.connect(self._on_accept)
@@ -132,15 +165,89 @@ class StudyEditDialog(QDialog):
             QMessageBox.warning(self, "Missing Fields", "Please fill in all fields.")
             return
 
-        type_str = "fkbp5" if self._type.currentIndex() == 0 else "single_study"
         self._study = {
             "study_name":    name,
-            "study_type":    type_str,
+            "study_type":    "single_study",
             "raw_data_root": raw,
             "master_file":   master,
             "output_folder": output,
+            "sex":           self._sex.currentText(),
+            "age":           self._age.text().strip(),
         }
+
+        group_map = {}
+        is_mixed  = self._sex.currentText() == "Mixed"
+        for row in range(self._gm_table.rowCount()):
+            p_item = self._gm_table.item(row, 0)
+            prefix = p_item.text().strip() if p_item else ""
+            if not prefix:
+                continue
+            if is_mixed:
+                sex_w  = self._gm_table.cellWidget(row, 1)
+                sex_val = sex_w.currentText() if sex_w else "Male"
+                g_item  = self._gm_table.item(row, 2)
+                group_map[prefix] = {"group": g_item.text().strip() if g_item else "", "sex": sex_val}
+            else:
+                g_item = self._gm_table.item(row, 1)
+                group_map[prefix] = g_item.text().strip() if g_item else ""
+        self._study["group_map"] = group_map
+
         self.accept()
+
+    def _update_gm_headers(self):
+        if self._gm_table.columnCount() == 3:
+            self._gm_table.setHorizontalHeaderLabels(["Prefix", "Sex", "Group Name"])
+            self._gm_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            self._gm_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            self._gm_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        else:
+            self._gm_table.setHorizontalHeaderLabels(["Prefix", "Group Name"])
+            self._gm_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            self._gm_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+
+    def _on_sex_changed(self, sex_text):
+        if not hasattr(self, '_gm_table'):
+            return
+        is_mixed       = sex_text == "Mixed"
+        currently_mixed = self._gm_table.columnCount() == 3
+        if is_mixed == currently_mixed:
+            return
+        # Snapshot existing rows before rebuilding
+        rows = []
+        for row in range(self._gm_table.rowCount()):
+            p_item = self._gm_table.item(row, 0)
+            prefix = p_item.text().strip() if p_item else ""
+            if currently_mixed:
+                sex_w   = self._gm_table.cellWidget(row, 1)
+                sex_val = sex_w.currentText() if sex_w else "Male"
+                g_item  = self._gm_table.item(row, 2)
+            else:
+                sex_val = "Male"
+                g_item  = self._gm_table.item(row, 1)
+            rows.append((prefix, g_item.text().strip() if g_item else "", sex_val))
+        self._gm_table.setRowCount(0)
+        self._gm_table.setColumnCount(3 if is_mixed else 2)
+        self._update_gm_headers()
+        for prefix, group_name, sex_val in rows:
+            self._add_gm_row(prefix, group_name, sex_val)
+
+    def _add_gm_row(self, prefix="", group_name="", sex="Male"):
+        row = self._gm_table.rowCount()
+        self._gm_table.insertRow(row)
+        self._gm_table.setItem(row, 0, QTableWidgetItem(prefix))
+        if self._gm_table.columnCount() == 3:
+            sex_combo = QComboBox()
+            sex_combo.addItems(["Male", "Female"])
+            sex_combo.setCurrentText(sex if sex in ("Male", "Female") else "Male")
+            self._gm_table.setCellWidget(row, 1, sex_combo)
+            self._gm_table.setItem(row, 2, QTableWidgetItem(group_name))
+        else:
+            self._gm_table.setItem(row, 1, QTableWidgetItem(group_name))
+
+    def _remove_gm_row(self):
+        row = self._gm_table.currentRow()
+        if row >= 0:
+            self._gm_table.removeRow(row)
 
     def get_study(self):
         return self._study
@@ -190,16 +297,18 @@ class StudyManagerDialog(QDialog):
         self._refresh_table()
 
         mgmt_row = QHBoxLayout()
-        add_btn  = QPushButton("Add Study")
-        edit_btn = QPushButton("Edit Study")
-        del_btn  = QPushButton("Remove Study")
-        for b in [add_btn, edit_btn, del_btn]:
+        add_btn        = QPushButton("Add Study")
+        self._edit_btn = QPushButton("Edit Study")
+        self._del_btn  = QPushButton("Remove Study")
+        for b in [add_btn, self._edit_btn, self._del_btn]:
             b.setFixedHeight(32)
             mgmt_row.addWidget(b)
         add_btn.clicked.connect(self._add_study)
-        edit_btn.clicked.connect(self._edit_study)
-        del_btn.clicked.connect(self._remove_study)
+        self._edit_btn.clicked.connect(self._edit_study)
+        self._del_btn.clicked.connect(self._remove_study)
+        self._table.itemSelectionChanged.connect(self._update_mgmt_buttons)
         layout.addLayout(mgmt_row)
+        self._update_mgmt_buttons()
 
         run_btn = QPushButton("Run Selected Study")
         run_btn.setFixedHeight(44)
@@ -212,11 +321,29 @@ class StudyManagerDialog(QDialog):
         layout.addWidget(run_btn)
 
     def _refresh_table(self):
+        from PyQt5.QtGui import QColor
         self._table.setRowCount(len(self._studies))
         for i, s in enumerate(self._studies):
-            self._table.setItem(i, 0, QTableWidgetItem(s.get("study_name", "")))
-            type_label = "FKBP5" if s.get("study_type") == "fkbp5" else "Single Study"
-            self._table.setItem(i, 1, QTableWidgetItem(type_label))
+            name_item = QTableWidgetItem(s.get("study_name", ""))
+            is_fkbp5  = s.get("study_type") == "fkbp5"
+            type_label = "FKBP5 (built-in)" if is_fkbp5 else "Single Study"
+            type_item  = QTableWidgetItem(type_label)
+            if is_fkbp5:
+                muted = QColor("#6c7086")
+                name_item.setForeground(muted)
+                type_item.setForeground(muted)
+            self._table.setItem(i, 0, name_item)
+            self._table.setItem(i, 1, type_item)
+        self._update_mgmt_buttons()
+
+    def _update_mgmt_buttons(self):
+        if not hasattr(self, '_edit_btn'):
+            return
+        row      = self._selected_row()
+        is_fkbp5 = row >= 0 and self._studies[row].get("study_type") == "fkbp5"
+        locked   = row < 0 or is_fkbp5
+        self._edit_btn.setEnabled(not locked)
+        self._del_btn.setEnabled(not locked)
 
     def _selected_row(self):
         items = self._table.selectedItems()
@@ -273,10 +400,141 @@ class StudyManagerDialog(QDialog):
         run_pipeline(study)
 
 
+# --- DARK THEME ---
+
+DARK_STYLESHEET = """
+QWidget {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    font-family: Arial;
+    font-size: 10pt;
+}
+QDialog {
+    background-color: #1e1e2e;
+}
+QGroupBox {
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding-top: 6px;
+    color: #89b4fa;
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+}
+QLineEdit, QComboBox {
+    background-color: #313244;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 4px 6px;
+    color: #cdd6f4;
+    selection-background-color: #89b4fa;
+    selection-color: #1e1e2e;
+}
+QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #89b4fa;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+QComboBox QAbstractItemView {
+    background-color: #313244;
+    border: 1px solid #45475a;
+    selection-background-color: #89b4fa;
+    selection-color: #1e1e2e;
+}
+QPushButton {
+    background-color: #313244;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 5px 14px;
+    color: #cdd6f4;
+}
+QPushButton:hover {
+    background-color: #45475a;
+    border-color: #89b4fa;
+}
+QPushButton:pressed {
+    background-color: #89b4fa;
+    color: #1e1e2e;
+}
+QTableWidget {
+    background-color: #181825;
+    alternate-background-color: #1e1e2e;
+    gridline-color: #45475a;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+}
+QTableWidget::item {
+    padding: 4px;
+}
+QTableWidget::item:selected {
+    background-color: #89b4fa;
+    color: #1e1e2e;
+}
+QHeaderView::section {
+    background-color: #313244;
+    color: #89b4fa;
+    border: none;
+    border-right: 1px solid #45475a;
+    border-bottom: 1px solid #45475a;
+    padding: 5px 8px;
+    font-weight: bold;
+}
+QScrollBar:vertical {
+    background: #181825;
+    width: 10px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #45475a;
+    border-radius: 5px;
+    min-height: 20px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #89b4fa;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal {
+    background: #181825;
+    height: 10px;
+    border-radius: 5px;
+}
+QScrollBar::handle:horizontal {
+    background: #45475a;
+    border-radius: 5px;
+    min-width: 20px;
+}
+QScrollBar::handle:horizontal:hover { background: #89b4fa; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QLabel {
+    color: #cdd6f4;
+    background: transparent;
+}
+QFrame[frameShape="4"], QFrame[frameShape="5"] {
+    color: #45475a;
+}
+QDialogButtonBox QPushButton {
+    min-width: 80px;
+}
+QMessageBox {
+    background-color: #1e1e2e;
+}
+QMessageBox QLabel {
+    color: #cdd6f4;
+}
+"""
+
+
 # --- ENTRY POINT ---
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyleSheet(DARK_STYLESHEET)
     mgr = StudyManagerDialog()
     mgr.exec_()
     sys.exit(0)

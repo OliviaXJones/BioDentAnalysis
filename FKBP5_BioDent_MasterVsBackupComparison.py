@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 
-old_file = r"C:\Users\olivi\OneDrive - Medical University of South Carolina\BioDent\FKBP5_BioDentMasterBackup_042826.xlsx"
-new_file = r"C:\Users\olivi\OneDrive - Medical University of South Carolina\BioDent\FKBP5_BioDentMaster.xlsx"
+old_file = r"F:\BioDent\FKBP5_BioDentMasterBackup_042826.xlsx"
+new_file = r"F:\BioDent\FKBP5_BioDentMaster.xlsx"
 
 # Use the sheet names from your error log
 sheets_to_check = [
