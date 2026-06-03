@@ -6,6 +6,33 @@
             "raw_data_root": "F:/BioDent/FKBP5 Raw Data",
             "master_file": "F:/BioDent/FKBP5_BioDentMaster.xlsx",
             "output_folder": "F:/BioDent"
+        },
+        {
+            "study_name": "SHPvsZA_ZA+ZACtrl 2024",
+            "study_type": "single_study",
+            "raw_data_root": "E:/BioDent/SHPvsZA_ZA+ZACtrl 2024",
+            "master_file": "",
+            "output_folder": "E:/BioDent/SHPvsZA_ZA+ZACtrl 2024",
+            "sex": "Mixed",
+            "age": "N/A",
+            "group_map": {
+                "S": {
+                    "group": "SHP99",
+                    "sex": "Deduce from ID"
+                },
+                "SC": {
+                    "group": "SHP99 Control",
+                    "sex": "Deduce from ID"
+                },
+                "Z": {
+                    "group": "ZA",
+                    "sex": "Deduce from ID"
+                },
+                "ZC": {
+                    "group": "ZA Control",
+                    "sex": "Deduce from ID"
+                }
+            }
         }
     ]
 }

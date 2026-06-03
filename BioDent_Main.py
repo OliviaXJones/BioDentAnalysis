@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QDialogButtonBox,
     QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QWidget, QFrame, QComboBox, QGroupBox
+    QWidget, QFrame, QComboBox, QGroupBox, QCheckBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -39,26 +39,18 @@ class StudyEditDialog(QDialog):
     def __init__(self, study=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Study" if study else "Add Study")
-        self.setMinimumWidth(600)
+        self.setMinimumWidth(640)
         self.setWindowModality(Qt.ApplicationModal)
         self._study = {}
         s = study or {}
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(14)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 16, 20, 16)
 
-        title = QLabel("Edit Study" if study else "Add Study")
-        title.setFont(QFont("Arial", 14, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-
-        div = QFrame()
-        div.setFrameShape(QFrame.HLine)
-        div.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(div)
-
-        form = QFormLayout()
+        # ── Study Details ─────────────────────────────────────────────
+        details_group = QGroupBox("Study Details")
+        form = QFormLayout(details_group)
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -80,17 +72,17 @@ class StudyEditDialog(QDialog):
         form.addRow("Raw Data Folder:", raw_row)
 
         self._master, master_row = self._path_row(s.get("master_file", ""), folder=False)
-        form.addRow("Master File (.xlsx):", master_row)
+        self._master.setPlaceholderText("Leave blank to auto-create in Output Folder")
+        form.addRow("Master File (.xlsx)\n(optional):", master_row)
 
         self._output, output_row = self._path_row(s.get("output_folder", ""), folder=True)
         form.addRow("Output Folder:", output_row)
 
-        layout.addLayout(form)
-        layout.addSpacing(8)
+        layout.addWidget(details_group)
 
-        # --- Group Map (Single Study only) ---
-        self._gm_group = QGroupBox("Group Map  (prefix → group name)")
-        gm_layout = QVBoxLayout(self._gm_group)
+        # ── Group Map ─────────────────────────────────────────────────
+        gm_group = QGroupBox("Group Map  (prefix → group name)")
+        gm_layout = QVBoxLayout(gm_group)
 
         _init_mixed = s.get("sex", "Male") == "Mixed"
         self._gm_table = QTableWidget(0, 3 if _init_mixed else 2)
@@ -107,20 +99,36 @@ class StudyEditDialog(QDialog):
         gm_btn_row.addWidget(add_row_btn)
         gm_btn_row.addWidget(rm_row_btn)
         gm_btn_row.addStretch()
+        self._deduce_cb = QCheckBox("Deduce sex from ID")
+        self._deduce_cb.setVisible(_init_mixed)
+        self._deduce_cb.toggled.connect(self._on_deduce_toggled)
+        gm_btn_row.addWidget(self._deduce_cb)
         gm_layout.addLayout(gm_btn_row)
 
-        layout.addWidget(self._gm_group)
+        layout.addWidget(gm_group)
+
+        # Detect initial deduce state and load rows
+        _init_deduce = any(
+            isinstance(v, dict) and v.get("sex") == "Deduce from ID"
+            for v in s.get("group_map", {}).values()
+        )
+        self._deduce_cb.setChecked(_init_deduce)
 
         for prefix, val in s.get("group_map", {}).items():
             if isinstance(val, dict):
-                self._add_gm_row(prefix, val.get("group", ""), val.get("sex", "Male"))
+                stored_sex = val.get("sex", "Male")
+                self._add_gm_row(prefix, val.get("group", ""),
+                                  "Male" if stored_sex == "Deduce from ID" else stored_sex)
             else:
                 self._add_gm_row(prefix, val)
 
-        btn_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        # ── Buttons ───────────────────────────────────────────────────
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.accepted.connect(self._on_accept)
         btn_box.rejected.connect(self.reject)
         layout.addWidget(btn_box)
+
+    # ------------------------------------------------------------------
 
     def _path_row(self, value, folder):
         edit = QLineEdit(value)
@@ -155,38 +163,49 @@ class StudyEditDialog(QDialog):
         if p:
             edit.setText(p)
 
+    def _on_deduce_toggled(self, checked):
+        for row in range(self._gm_table.rowCount()):
+            w = self._gm_table.cellWidget(row, 2)
+            if w:
+                w.setEnabled(not checked)
+
     def _on_accept(self):
         name   = self._name.text().strip()
         raw    = self._raw.text().strip()
-        master = self._master.text().strip()
         output = self._output.text().strip()
 
-        if not all([name, raw, master, output]):
-            QMessageBox.warning(self, "Missing Fields", "Please fill in all fields.")
+        if not all([name, raw, output]):
+            QMessageBox.warning(self, "Missing Fields",
+                                "Please fill in Study Name, Raw Data Folder, and Output Folder.")
             return
 
         self._study = {
             "study_name":    name,
             "study_type":    "single_study",
             "raw_data_root": raw,
-            "master_file":   master,
+            "master_file":   self._master.text().strip(),
             "output_folder": output,
             "sex":           self._sex.currentText(),
             "age":           self._age.text().strip(),
         }
 
-        group_map = {}
-        is_mixed  = self._sex.currentText() == "Mixed"
+        group_map  = {}
+        is_mixed   = self._sex.currentText() == "Mixed"
+        deduce_all = is_mixed and self._deduce_cb.isChecked()
         for row in range(self._gm_table.rowCount()):
             p_item = self._gm_table.item(row, 0)
             prefix = p_item.text().strip() if p_item else ""
             if not prefix:
                 continue
             if is_mixed:
-                sex_w  = self._gm_table.cellWidget(row, 1)
-                sex_val = sex_w.currentText() if sex_w else "Male"
-                g_item  = self._gm_table.item(row, 2)
-                group_map[prefix] = {"group": g_item.text().strip() if g_item else "", "sex": sex_val}
+                g_item  = self._gm_table.item(row, 1)
+                sex_w   = self._gm_table.cellWidget(row, 2)
+                sex_val = "Deduce from ID" if deduce_all else (
+                    sex_w.currentText() if sex_w else "Male")
+                group_map[prefix] = {
+                    "group": g_item.text().strip() if g_item else "",
+                    "sex":   sex_val,
+                }
             else:
                 g_item = self._gm_table.item(row, 1)
                 group_map[prefix] = g_item.text().strip() if g_item else ""
@@ -196,35 +215,45 @@ class StudyEditDialog(QDialog):
 
     def _update_gm_headers(self):
         if self._gm_table.columnCount() == 3:
-            self._gm_table.setHorizontalHeaderLabels(["Prefix", "Sex", "Group Name"])
-            self._gm_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-            self._gm_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-            self._gm_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            self._gm_table.setHorizontalHeaderLabels(["Prefix", "Group Name", "Sex"])
+            self._gm_table.horizontalHeader().setSectionResizeMode(
+                0, QHeaderView.ResizeToContents)
+            self._gm_table.horizontalHeader().setSectionResizeMode(
+                1, QHeaderView.Stretch)
+            self._gm_table.setColumnWidth(2, 90)
+            self._gm_table.horizontalHeader().setSectionResizeMode(
+                2, QHeaderView.Fixed)
         else:
             self._gm_table.setHorizontalHeaderLabels(["Prefix", "Group Name"])
-            self._gm_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-            self._gm_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            self._gm_table.horizontalHeader().setSectionResizeMode(
+                0, QHeaderView.ResizeToContents)
+            self._gm_table.horizontalHeader().setSectionResizeMode(
+                1, QHeaderView.Stretch)
 
     def _on_sex_changed(self, sex_text):
         if not hasattr(self, '_gm_table'):
             return
-        is_mixed       = sex_text == "Mixed"
+        is_mixed        = sex_text == "Mixed"
         currently_mixed = self._gm_table.columnCount() == 3
         if is_mixed == currently_mixed:
             return
-        # Snapshot existing rows before rebuilding
+
+        if hasattr(self, '_deduce_cb'):
+            self._deduce_cb.setVisible(is_mixed)
+
         rows = []
         for row in range(self._gm_table.rowCount()):
             p_item = self._gm_table.item(row, 0)
             prefix = p_item.text().strip() if p_item else ""
             if currently_mixed:
-                sex_w   = self._gm_table.cellWidget(row, 1)
-                sex_val = sex_w.currentText() if sex_w else "Male"
-                g_item  = self._gm_table.item(row, 2)
-            else:
-                sex_val = "Male"
                 g_item  = self._gm_table.item(row, 1)
-            rows.append((prefix, g_item.text().strip() if g_item else "", sex_val))
+                sex_w   = self._gm_table.cellWidget(row, 2)
+                sex_val = sex_w.currentText() if sex_w else "Male"
+                rows.append((prefix, g_item.text().strip() if g_item else "", sex_val))
+            else:
+                g_item = self._gm_table.item(row, 1)
+                rows.append((prefix, g_item.text().strip() if g_item else "", "Male"))
+
         self._gm_table.setRowCount(0)
         self._gm_table.setColumnCount(3 if is_mixed else 2)
         self._update_gm_headers()
@@ -236,11 +265,13 @@ class StudyEditDialog(QDialog):
         self._gm_table.insertRow(row)
         self._gm_table.setItem(row, 0, QTableWidgetItem(prefix))
         if self._gm_table.columnCount() == 3:
+            self._gm_table.setItem(row, 1, QTableWidgetItem(group_name))
             sex_combo = QComboBox()
             sex_combo.addItems(["Male", "Female"])
             sex_combo.setCurrentText(sex if sex in ("Male", "Female") else "Male")
-            self._gm_table.setCellWidget(row, 1, sex_combo)
-            self._gm_table.setItem(row, 2, QTableWidgetItem(group_name))
+            if hasattr(self, '_deduce_cb'):
+                sex_combo.setEnabled(not self._deduce_cb.isChecked())
+            self._gm_table.setCellWidget(row, 2, sex_combo)
         else:
             self._gm_table.setItem(row, 1, QTableWidgetItem(group_name))
 

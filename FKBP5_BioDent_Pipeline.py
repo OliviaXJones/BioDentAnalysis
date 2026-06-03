@@ -7,7 +7,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QMessageBox
 
 from BioDent_Utils import (
-    COLUMNS_TO_AVERAGE, get_sex, clean_and_average_data, ask_not_found_action
+    COLUMNS_TO_AVERAGE, FKBP5_ID_REGEX, get_sex, clean_and_average_data, ask_not_found_action
 )
 
 CONFIG_PATH = Path(__file__).parent / "study_config.json"
@@ -189,7 +189,7 @@ def run_pipeline(config):
                              f"Could not find:\n{master_path}")
         return
 
-    df_source = clean_and_average_data(txt_files)
+    df_source = clean_and_average_data(txt_files, id_pattern=FKBP5_ID_REGEX)
     if df_source.empty:
         QMessageBox.critical(None, "No Valid Data",
                              "No valid data was found in the .txt files.")

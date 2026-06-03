@@ -23,10 +23,113 @@ COLUMNS_TO_AVERAGE = [
     "1st Cycle Indentation Distance (ID 1st) - um"
 ]
 
+FKBP5_ID_REGEX = r"2?[WMH][.\-_]?\d+[.\-_]?[MF][.\-_]?\d+"
+
 # --- SHARED HELPERS ---
 
 def get_sex(code):
     return 'F' if 'F' in str(code).upper() else 'M'
+
+
+def _is_valid_id(candidate, id_pattern=None, group_map=None):
+    """Return True if candidate looks like a real mouse ID for this study."""
+    if not candidate:
+        return False
+    if id_pattern and re.search(id_pattern, candidate, re.IGNORECASE):
+        return True
+    if group_map:
+        for prefix in group_map:
+            if re.match(re.escape(prefix) + r'[-_.\s]?', candidate, re.IGNORECASE):
+                return True
+    return False
+
+
+def _find_id_in_text(text, id_pattern=None, group_map=None):
+    """
+    Scan arbitrary text for a valid mouse ID.
+    Returns a squashed (no separator chars) ID string, or None.
+    For id_pattern studies, searches the full text with the regex.
+    For group_map studies, looks for a known prefix (with optional separator)
+    followed by alphanumerics.
+    """
+    text_upper = str(text).strip().upper()
+    if id_pattern:
+        m = re.search(id_pattern, text_upper)
+        if m:
+            return re.sub(r"[.\-_]", "", m.group(0))
+    if group_map:
+        for prefix in sorted(group_map.keys(), key=len, reverse=True):
+            m = re.search(
+                re.escape(prefix.upper()) + r'[-_.\s]?[A-Z0-9]*', text_upper)
+            if m:
+                return m.group(0)
+    return None
+
+
+def _clean_id_field(raw_id, id_pattern=None, group_map=None):
+    """
+    Strip 'actual' / 'actually' noise from the ID field itself.
+    Handles all three forms: 'ZC1M-actual', 'ZC1M actual', 'Actually ZC1M'.
+    Falls back to extracting a valid code embedded in the noisy string.
+    """
+    s = str(raw_id).strip()
+    # Strip leading "Actually ..."
+    cleaned = re.sub(r'(?i)^actually[\s\-_]+', '', s).strip()
+    # Strip trailing "... actual(ly)"
+    cleaned = re.sub(r'(?i)[\s\-_]+actual(?:ly)?$', '', cleaned).strip()
+    if cleaned and cleaned.upper() != s.upper():
+        return cleaned
+    # Fall back: find a valid ID embedded in the noisy field
+    found = _find_id_in_text(s, id_pattern=id_pattern, group_map=group_map)
+    if found:
+        found_squashed = re.sub(r"[.\-_]", "", found.upper())
+        s_squashed     = re.sub(r"[.\-_]", "", s.upper())
+        if found_squashed != s_squashed:
+            return found
+    return s
+
+
+def _apply_note_corrections(df, id_pattern=None, group_map=None):
+    """
+    Scan Notes for 'ACTUALLY <ID>' (explicit keyword, both studies) or a bare
+    FKBP5 pattern match anywhere in Notes (id_pattern studies only, preserving
+    the existing behaviour).
+
+    When a row's ID is corrected, ALL rows sharing the same original wrong ID
+    are renamed too — this handles #2 / #3 / #4 measurements that carry the
+    wrong label but have no note of their own.
+
+    First-found correction wins when the same wrong ID appears in multiple notes
+    with conflicting claims (rare, but deterministic).
+    """
+    corrections = {}  # original_id_upper -> corrected_id
+
+    for _, row in df.iterrows():
+        notes_upper   = str(row['Notes']).strip().upper()
+        current_upper = str(row['ID']).strip().upper()
+
+        # Explicit "ACTUALLY <ID>" — works for both study types
+        m = re.search(r'ACTUALLY\s+([A-Z0-9][A-Z0-9.\-_]*)', notes_upper)
+        if m:
+            # Strip trailing measurement markers like "#1", "# 2"
+            raw_candidate = re.sub(r'[#\s]*\d+\s*$', '', m.group(1)).rstrip('. -_')
+            candidate = re.sub(r'[.\-_]', '', raw_candidate)
+            if _is_valid_id(candidate, id_pattern, group_map) and candidate != current_upper:
+                corrections.setdefault(current_upper, candidate)
+                continue
+
+        # Fallback for FKBP5: bare regex anywhere in Notes (existing behaviour)
+        if id_pattern:
+            found = _find_id_in_text(notes_upper, id_pattern=id_pattern)
+            if found and found != current_upper:
+                corrections.setdefault(current_upper, found)
+
+    if corrections:
+        df = df.copy()
+        df['ID'] = df['ID'].apply(
+            lambda x: corrections.get(str(x).strip().upper(), x)
+        )
+    return df
 
 
 # --- MANUAL SELECTION DIALOG ---
@@ -156,7 +259,24 @@ def ask_not_found_action(mouse_code):
 
 # --- DATA CLEANING & AVERAGING ---
 
-def clean_and_average_data(txt_file_paths):
+def clean_and_average_data(txt_file_paths, id_pattern=None, group_map=None):
+    """
+    Read, clean, and average BioDent .txt files.
+
+    id_pattern  – regex string used by FKBP5-style studies (pass FKBP5_ID_REGEX)
+    group_map   – prefix→group dict used by single-study pipelines
+
+    Cleaning steps applied to both study types:
+      1. Strip 'actual'/'actually' noise from the ID field itself.
+      2. Scan Notes for 'ACTUALLY <ID>' and rename ALL rows sharing the same
+         wrong original ID (propagates the fix to #2/#3/#4 measurements).
+      3. For id_pattern studies, also scan Notes for a bare pattern match
+         (existing FKBP5 behaviour).
+      4. Drop duplicates, drop rows flagged 'ignore'/'do not use'/etc.
+      5. Filter to known group_map prefixes (single-study only).
+      6. Per-mouse averaging; >4 → manual selection dialog,
+         <4 → average/skip/rename prompt.
+    """
     all_data = []
     for path in txt_file_paths:
         try:
@@ -172,18 +292,14 @@ def clean_and_average_data(txt_file_paths):
     df.columns = [c.replace('µ', 'u') if isinstance(c, str) else c for c in df.columns]
     df = df.rename(columns={'Sample/Location': 'ID'})
 
-    ID_REGEX = r"2?[WMH][.\-_]?\d+[.\-_]?[MF][.\-_]?\d+"
+    # Step 1: clean the ID field itself ("ZC1M-actual" → "ZC1M", etc.)
+    df['ID'] = df['ID'].apply(
+        lambda x: _clean_id_field(x, id_pattern=id_pattern, group_map=group_map)
+    )
 
-    def fix_mislabeled_id(row):
-        notes = str(row['Notes']).strip().upper()
-        match = re.search(ID_REGEX, notes)
-        if match:
-            true_id = re.sub(r"[.\-_]", "", match.group(0))
-            if true_id != str(row['ID']).strip().upper():
-                return true_id
-        return row['ID']
+    # Step 2+3: correct mislabeled IDs via Notes; bulk-rename same-ID siblings
+    df = _apply_note_corrections(df, id_pattern=id_pattern, group_map=group_map)
 
-    df['ID'] = df.apply(fix_mislabeled_id, axis=1)
     target_val_col = "1st Cycle Indentation Distance (ID 1st) - um"
     df = df.drop_duplicates(subset=['ID', 'Measurement #', target_val_col], keep='first')
 
@@ -192,6 +308,19 @@ def clean_and_average_data(txt_file_paths):
     df_cleaned = df[~mask].copy()
     df_cleaned = df_cleaned.dropna(subset=['ID'])
     df_cleaned['ID'] = df_cleaned['ID'].astype(str)
+
+    # Step 5: keep only IDs that match a known group_map prefix (single-study)
+    if group_map:
+        def _prefix_matches(mouse_id):
+            for prefix in group_map:
+                if re.match(re.escape(prefix) + r'[-_.\s]?', str(mouse_id).strip(),
+                            re.IGNORECASE):
+                    return True
+            return False
+        df_cleaned = df_cleaned[df_cleaned['ID'].apply(_prefix_matches)]
+
+    if df_cleaned.empty:
+        return pd.DataFrame()
 
     final_averages = []
     unique_ids = sorted(df_cleaned['ID'].unique())
@@ -212,10 +341,12 @@ def clean_and_average_data(txt_file_paths):
             action = ask_small_group_action(mouse_id_str, len(group))
             if action == 'r':
                 auto_id = None
-                for idx, row in group.iterrows():
-                    scanned = fix_mislabeled_id(row)
-                    if scanned != row['ID']:
-                        auto_id = scanned
+                for _, row in group.iterrows():
+                    found = _find_id_in_text(
+                        str(row['Notes']), id_pattern=id_pattern, group_map=group_map
+                    )
+                    if found and found.upper() != mouse_id.strip().upper():
+                        auto_id = found
                         break
                 new_id = ask_new_id(mouse_id_str, auto_id)
                 if new_id:
@@ -230,8 +361,8 @@ def clean_and_average_data(txt_file_paths):
         for col in COLUMNS_TO_AVERAGE:
             group[col] = pd.to_numeric(group[col], errors='coerce')
 
-        avg_values = group[COLUMNS_TO_AVERAGE].mean()
-        avg_values['ID'] = mouse_id_str
+        avg_values        = group[COLUMNS_TO_AVERAGE].mean()
+        avg_values['ID']  = mouse_id_str
         final_averages.append(avg_values)
         i += 1
 
