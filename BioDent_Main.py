@@ -16,6 +16,8 @@ STUDIES_CONFIG_PATH = Path(__file__).parent / "studies_config.json"
 
 STUDY_TYPES = ["FKBP5", "Single Study"]
 
+__version__ = "1.0.0"
+
 
 # --- CONFIG HELPERS ---
 
@@ -477,7 +479,7 @@ class HelpDialog(QDialog):
 class StudyManagerDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("BioDent Analysis Pipeline")
+        self.setWindowTitle(f"BioDent Analysis Pipeline  v{__version__}")
         self.setMinimumSize(700, 400)
         self.setWindowModality(Qt.ApplicationModal)
         self._studies = load_studies()
