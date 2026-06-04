@@ -180,8 +180,26 @@ def run_pipeline(config):
     print(f"CSV output: {csv_output_dir}")
 
     if not txt_files:
-        QMessageBox.critical(None, "No Data Files",
-                             f"No .txt files found in:\n{raw_data_root}")
+        if master_path.exists():
+            reply = QMessageBox.question(
+                None, "No New Data Files",
+                f"No .txt files found in:\n{raw_data_root}\n\n"
+                "Regenerate CSV summaries from the existing master file?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                try:
+                    csv_output_dir.mkdir(parents=True, exist_ok=True)
+                    process_master_to_csv(master_path, csv_output_dir)
+                    QMessageBox.information(
+                        None, "Done",
+                        f"CSV summaries saved to:\n{csv_output_dir}"
+                    )
+                except Exception as e:
+                    QMessageBox.critical(None, "Unexpected Error", str(e))
+        else:
+            QMessageBox.critical(None, "No Data Files",
+                                 f"No .txt files found in:\n{raw_data_root}")
         return
 
     if not master_path.exists():

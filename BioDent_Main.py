@@ -6,7 +6,8 @@ from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QPushButton, QFileDialog, QDialogButtonBox,
     QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QWidget, QFrame, QComboBox, QGroupBox, QCheckBox
+    QWidget, QFrame, QComboBox, QGroupBox, QCheckBox, QTextBrowser,
+    QScrollArea
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -284,6 +285,193 @@ class StudyEditDialog(QDialog):
         return self._study
 
 
+# --- HELP DIALOG ---
+
+_HELP_HTML = """
+<style>
+  body  { font-family: Arial, sans-serif; font-size: 10pt; color: #cdd6f4; }
+  h1    { font-size: 13pt; color: #89b4fa; margin-bottom: 4px; }
+  h2    { font-size: 11pt; color: #89dceb; margin-top: 18px; margin-bottom: 4px; border-bottom: 1px solid #45475a; padding-bottom: 3px; }
+  h3    { font-size: 10pt; color: #a6e3a1; margin-top: 12px; margin-bottom: 2px; }
+  ul    { margin: 4px 0 8px 18px; padding: 0; }
+  li    { margin-bottom: 3px; }
+  code  { background: #313244; padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 9.5pt; }
+  .note { color: #f38ba8; font-style: italic; }
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  td, th { border: 1px solid #45475a; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th    { background: #313244; color: #89b4fa; font-weight: bold; }
+  tr:nth-child(even) { background: #1e1e2e; }
+</style>
+
+<h1>BioDent Analysis Pipeline &mdash; User Guide</h1>
+<p>This guide explains every automatic data-cleaning rule and every interactive prompt
+you may encounter while running a study.</p>
+
+<h2>1 &mdash; Setting Up a Study</h2>
+<p>Click <b>Add Study</b> to create a new study configuration. All settings are saved
+and reused on future runs.</p>
+
+<table>
+  <tr><th>Field</th><th>What to enter</th></tr>
+  <tr><td><b>Study Name</b></td>
+      <td>A short label for this cohort (e.g. <code>SHPvsZA Male</code>).
+          Used in output file names &mdash; avoid special characters.</td></tr>
+  <tr><td><b>Cohort Sex</b></td>
+      <td><code>Male</code>, <code>Female</code>, or <code>Mixed</code>.
+          Choosing <b>Mixed</b> splits all CSV outputs into separate Male / Female
+          folders and enables per-prefix sex assignment in the Group Map.</td></tr>
+  <tr><td><b>Cohort Age</b></td>
+      <td>Optional label (e.g. <code>16 Weeks</code>). Appended to output file names
+          so you can tell batches apart.</td></tr>
+  <tr><td><b>Raw Data Folder</b></td>
+      <td>The folder that contains the BioDent <code>.txt</code> export files for this
+          run. After processing, every <code>.txt</code> is moved automatically into
+          an <code>Analyzed_Files</code> subfolder so it won&rsquo;t be re-processed
+          next time.</td></tr>
+  <tr><td><b>Master File (.xlsx) &mdash; optional</b></td>
+      <td>Point to an existing Excel master to update it, or leave <i>blank</i> to
+          auto-create a new master file in the Output Folder.
+          The auto-created file is named <code>&lt;StudyName&gt;_Master.xlsx</code>.</td></tr>
+  <tr><td><b>Output Folder</b></td>
+      <td>Where the master file and all CSV summaries are written.</td></tr>
+</table>
+
+<h2>2 &mdash; Group Map</h2>
+<p>The Group Map tells the pipeline which ID prefix belongs to which experimental group.
+Enter one row per group:</p>
+<ul>
+  <li><b>Prefix</b> &mdash; the letters at the start of a mouse ID (e.g. <code>ZC</code>,
+      <code>ZT</code>, <code>SHP</code>). Matching is case-insensitive and tolerates
+      separators (<code>ZC-1M</code>, <code>ZC_1M</code>, and <code>ZC1M</code> all
+      match prefix <code>ZC</code>).</li>
+  <li><b>Group Name</b> &mdash; the label that appears in CSV column headers
+      (e.g. <code>Zinc Control</code>).</li>
+  <li><b>Sex</b> (Mixed cohorts only) &mdash; the sex assigned to every animal with
+      this prefix. Check <b>&ldquo;Deduce sex from ID&rdquo;</b> to read the trailing
+      <code>M</code> or <code>F</code> from each animal&rsquo;s ID automatically
+      instead of using the dropdown.</li>
+</ul>
+<p class="note">IDs that don&rsquo;t match any prefix are excluded from analysis.</p>
+
+<h2>3 &mdash; Automatic Data Cleaning</h2>
+<p>The pipeline applies these cleaning steps <i>before</i> any averages are calculated.
+You will not be prompted &mdash; these happen silently.</p>
+
+<h3>3a &mdash; &ldquo;Ignore / Do Not Use&rdquo; flags</h3>
+<p>Any measurement row whose <b>Notes</b> column contains one of the following words or
+phrases is <b>dropped entirely</b>:</p>
+<ul>
+  <li><code>ignore</code> &nbsp;(or partial: <code>ignor</code>)</li>
+  <li><code>do not use</code></li>
+  <li><code>disregard</code></li>
+  <li><code>don't</code></li>
+</ul>
+<p><b>Example:</b> Notes = <code>do not use &mdash; probe slipped</code> &rarr;
+that row is removed from all calculations.</p>
+
+<h3>3b &mdash; &ldquo;Actually&rdquo; in the ID field</h3>
+<p>Sometimes an ID cell was typed with noise after the fact.
+The pipeline strips the noise and uses the clean ID:</p>
+<ul>
+  <li><code>ZC1M-actual</code> &rarr; <code>ZC1M</code></li>
+  <li><code>ZC1M actual</code> &rarr; <code>ZC1M</code></li>
+  <li><code>Actually ZC1M</code> &rarr; <code>ZC1M</code></li>
+</ul>
+
+<h3>3c &mdash; &ldquo;ACTUALLY &lt;ID&gt;&rdquo; in Notes</h3>
+<p>If a Notes cell contains <code>ACTUALLY &lt;correct ID&gt;</code>, the pipeline
+<b>renames that measurement &mdash; and all other measurements sharing the same
+original wrong ID</b> &mdash; to the correct animal. This handles the common case
+where measurement #2, #3, and #4 carry the wrong label but only one row has a note.</p>
+<p><b>Example:</b> ID = <code>ZC1M</code>, Notes = <code>actually ZC2M</code><br>
+&rarr; <i>all</i> rows labelled <code>ZC1M</code> in that file are renamed
+<code>ZC2M</code>.</p>
+<p class="note">The first correction found wins when the same wrong ID appears in
+multiple notes with different claims.</p>
+
+<h2>4 &mdash; Interactive Prompts During Processing</h2>
+<p>After cleaning, the pipeline averages each animal&rsquo;s measurements. The
+following dialogs appear when the data needs your judgement.</p>
+
+<h3>4a &mdash; Insufficient Measurements (&lt; 4 rows)</h3>
+<p>A well-formed BioDent run has exactly 4 measurements per animal.
+If an animal has fewer, you are asked:</p>
+<table>
+  <tr><th>Button</th><th>What it does</th></tr>
+  <tr><td><b>Average Anyway</b></td>
+      <td>Include this animal in the analysis using however many measurements exist.
+          The average is calculated from fewer data points &mdash; flag in your notes
+          if this is intentional.</td></tr>
+  <tr><td><b>Skip</b></td>
+      <td>Exclude this animal entirely. It will not appear in the master file or
+          any CSV output.</td></tr>
+  <tr><td><b>Rename / Realign</b></td>
+      <td>The measurements may belong to a different animal (wrong ID typed at the
+          machine). You will be prompted to type the correct ID. All measurements
+          are reassigned and the pipeline retries with the new ID.</td></tr>
+</table>
+
+<h3>4b &mdash; Too Many Measurements (&gt; 4 rows)</h3>
+<p>A dialog shows all rows for the animal with a <b>Keep?</b> checkbox.
+Tick exactly the 4 rows you want to keep, then click <b>Confirm Selection</b>.
+Unchecked rows are discarded. This usually happens when a measurement run was
+accidentally repeated.</p>
+
+<h3>4c &mdash; Mouse Not Found in Master (during sync)</h3>
+<p>When writing averages back to the master Excel file, if a processed ID doesn&rsquo;t
+match any row in the sheet:</p>
+<table>
+  <tr><th>Button</th><th>What it does</th></tr>
+  <tr><td><b>Rename / Retry</b></td>
+      <td>Type the ID <i>exactly</i> as it appears in the master Excel file
+          (including any capitalisation or separators). The pipeline retries
+          the match and writes the data if found.</td></tr>
+  <tr><td><b>Skip</b></td>
+      <td>Do not write this animal to the master. Its averaged values are lost
+          for this run.</td></tr>
+</table>
+
+<h2>5 &mdash; Output Files</h2>
+<ul>
+  <li><b>&lt;StudyName&gt;_Master.xlsx</b> &mdash; one row per animal with all
+      10 averaged metrics. Updated on every run.</li>
+  <li><b>&lt;StudyName&gt;_CSVFiles / &lt;StudyName&gt;_Summary.csv</b> &mdash;
+      flat summary of every animal with Group (and Sex if Mixed).</li>
+  <li><b>CSVFiles / Per_Metric / &lt;metric&gt;.csv</b> &mdash; one pivot table
+      per BioDent metric, columns = groups, rows = animal IDs. Ready for
+      copy-paste into GraphPad / SPSS.</li>
+  <li><b>Analyzed_Files/</b> (inside Raw Data Folder) &mdash; processed
+      <code>.txt</code> files are moved here so they&rsquo;re not processed again.</li>
+</ul>
+"""
+
+
+class HelpDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("BioDent User Guide")
+        self.setMinimumSize(760, 600)
+        self.resize(800, 660)
+        self.setWindowModality(Qt.ApplicationModal)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(False)
+        browser.setHtml(_HELP_HTML)
+        layout.addWidget(browser)
+
+        close_btn = QPushButton("Close")
+        close_btn.setFixedWidth(100)
+        close_btn.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+
 # --- STUDY MANAGER DIALOG ---
 
 class StudyManagerDialog(QDialog):
@@ -341,6 +529,14 @@ class StudyManagerDialog(QDialog):
         layout.addLayout(mgmt_row)
         self._update_mgmt_buttons()
 
+        bottom_row = QHBoxLayout()
+
+        help_btn = QPushButton("? Help / User Guide")
+        help_btn.setFixedHeight(44)
+        help_btn.setFont(QFont("Arial", 10))
+        help_btn.clicked.connect(self._show_help)
+        bottom_row.addWidget(help_btn)
+
         run_btn = QPushButton("Run Selected Study")
         run_btn.setFixedHeight(44)
         run_btn.setFont(QFont("Arial", 11, QFont.Bold))
@@ -349,7 +545,9 @@ class StudyManagerDialog(QDialog):
             "QPushButton:hover { background-color: #1565C0; }"
         )
         run_btn.clicked.connect(self._run_selected)
-        layout.addWidget(run_btn)
+        bottom_row.addWidget(run_btn, stretch=1)
+
+        layout.addLayout(bottom_row)
 
     def _refresh_table(self):
         from PyQt5.QtGui import QColor
@@ -413,6 +611,10 @@ class StudyManagerDialog(QDialog):
             self._studies.pop(row)
             save_studies(self._studies)
             self._refresh_table()
+
+    def _show_help(self):
+        dlg = HelpDialog(parent=self)
+        dlg.exec_()
 
     def _run_selected(self):
         row = self._selected_row()
